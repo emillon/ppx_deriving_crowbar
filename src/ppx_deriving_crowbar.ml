@@ -123,8 +123,10 @@ let remove_pervasives ~deriver:_ typ =
 
 let rec expr_of_typ always_nonempty quoter typ =
   let expr_of_typ = expr_of_typ always_nonempty quoter in
+  let loc = typ.ptyp_loc in
   match Attribute.get Attr.generator typ with
-  | Some generator -> (* XXX *) Ppxlib.Quoter.sanitize quoter generator
+  | Some generator ->
+    [%expr [%e Ppxlib.Quoter.quote quoter generator] () ]
   | None ->
   let typ = remove_pervasives ~deriver typ in
   let loc = typ.ptyp_loc in
@@ -342,10 +344,7 @@ let str_of_type ~always_nonempty ~path ({ptype_loc = loc } as type_decl) =
     strong_type_of_type @@ core_type_of_decl type_decl in
   let generate_var = Ast_builder.Default.pvar ~loc (mangle_type_decl type_decl) in
   [Vb.mk (Pat.constraint_ generate_var out_type)
-     (* XXX (Ppx_deriving.sanitize ~quoter (polymorphize (lazify generator)));*)
-     (
-     polymorphize (lazify loc generator)
-   )
+     (Ppxlib.Quoter.sanitize quoter (polymorphize (lazify loc generator)))
   ]
 
 let tag_recursive_for_unlazifying type_decls =
