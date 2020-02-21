@@ -89,7 +89,7 @@ type krord =
 type stdord =
   | Empty
   | Nonempty of hlifd list
-[@@deriving crowbar { nonempty = true }]
+[@@deriving crowbar ~nonempty]
 
 let () =
   Crowbar.(add_test ~name:"everything is awesome"
