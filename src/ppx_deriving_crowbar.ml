@@ -1,5 +1,3 @@
-open Parsetree
-open Asttypes
 open Ppxlib
 open Ast_helper
 
@@ -10,18 +8,18 @@ let lid ~loc s = mkloc (Longident.parse s) loc
 let free_vars_in_core_type typ =
   let rec free_in typ =
     match typ with
-    | { ptyp_desc = Ptyp_any } -> []
-    | { ptyp_desc = Ptyp_var name } ->
+    | { ptyp_desc = Ptyp_any; _ } -> []
+    | { ptyp_desc = Ptyp_var name; _ } ->
       [mkloc name typ.ptyp_loc]
-    | { ptyp_desc = Ptyp_arrow (_, x, y) } -> free_in x @ free_in y
-    | { ptyp_desc = (Ptyp_tuple xs | Ptyp_constr (_, xs)) } ->
+    | { ptyp_desc = Ptyp_arrow (_, x, y); _ } -> free_in x @ free_in y
+    | { ptyp_desc = (Ptyp_tuple xs | Ptyp_constr (_, xs)); _ } ->
       List.map free_in xs |> List.concat
-    | { ptyp_desc = Ptyp_alias (x, name) } ->
+    | { ptyp_desc = Ptyp_alias (x, name); _ } ->
       [mkloc name typ.ptyp_loc]
       @ free_in x
-    | { ptyp_desc = Ptyp_poly (bound, x) } ->
+    | { ptyp_desc = Ptyp_poly (bound, x); _ } ->
       List.filter (fun y -> not (List.mem y bound)) (free_in x)
-    | { ptyp_desc = Ptyp_variant (rows, _, _) } ->
+    | { ptyp_desc = Ptyp_variant (rows, _, _); _ } ->
       List.map (
           function 
                     {prf_desc = Rtag(_, _, ts); _}  
@@ -94,7 +92,7 @@ let mangle_lid = function
   | Ldot (p, s) -> Ldot (p, mangle s)
   | Lapply _    -> assert false
 
-let mangle_type_decl { ptype_name = { txt = name } } =
+let mangle_type_decl { ptype_name = { txt = name; _ }; _ } =
   mangle name
 
 let unlazify_attribute_name = "crowbar_recursive_typedef_please_unlazy"
@@ -131,7 +129,7 @@ let rec expr_of_typ always_nonempty quoter typ =
   let typ = remove_pervasives ~deriver typ in
   let loc = typ.ptyp_loc in
   match typ with
-  | { ptyp_desc = Ptyp_constr ({ txt = lid }, args) } ->
+  | { ptyp_desc = Ptyp_constr ({ txt = lid; _ }, args); _ } ->
     begin
       match typ with
     | [%type: unit] -> [%expr Crowbar.const ()]
@@ -182,12 +180,12 @@ let rec expr_of_typ always_nonempty quoter typ =
     | true -> [%expr Crowbar.unlazy [%e fwd]]
     | false -> [%expr [%e fwd]]
     end
-  | { ptyp_desc = Ptyp_tuple tuple; ptyp_loc = loc } ->
+  | { ptyp_desc = Ptyp_tuple tuple; ptyp_loc = loc; _ } ->
     let gens, vars_to_tuple = generate_tuple ~loc always_nonempty quoter tuple in
     [%expr Crowbar.(map [%e (make_crowbar_list ~loc gens)] [%e vars_to_tuple])]
-  | { ptyp_desc = Ptyp_var name } -> Ast_builder.Default.evar ~loc ("poly_"^name)
-  | { ptyp_desc = Ptyp_alias (typ, _) } -> expr_of_typ typ
-  | { ptyp_desc = Ptyp_variant (fields, openness, labels);ptyp_loc} ->
+  | { ptyp_desc = Ptyp_var name; _ } -> Ast_builder.Default.evar ~loc ("poly_"^name)
+  | { ptyp_desc = Ptyp_alias (typ, _); _ } -> expr_of_typ typ
+  | { ptyp_desc = Ptyp_variant (fields, _, _);ptyp_loc; _} ->
         (* I think we don't care about open vs closed, we just want to wrap thee
            things in the right rows; similarly we don't care about labels *)
         (* just like for non-poly variants, we need to choose from the set of
@@ -196,16 +194,16 @@ let rec expr_of_typ always_nonempty quoter typ =
            about that a bit more, I think they're not but make sure). *)
     let translate = function
       | Rinherit typ -> expr_of_typ typ
-      | Rtag (label, attrs, []) ->
+      | Rtag (label, _, []) ->
         (* nullary, just use the label name *)
         [%expr Crowbar.const [%e Ast_helper.Exp.variant label.txt None]]
-      | Rtag (label, attrs, [{ptyp_desc = Ptyp_tuple tuple; ptyp_loc=loc}]) ->
+      | Rtag (label, _, [{ptyp_desc = Ptyp_tuple tuple; ptyp_loc=loc; _}]) ->
         (* good ol' tuples *)
         let (gens, last_fun) =
           generate_tuple ~loc always_nonempty quoter
             ~constructor:(Ast_helper.Exp.variant label.txt) tuple in
         [%expr Crowbar.(map [%e (make_crowbar_list ~loc gens)] [%e last_fun])]
-      | Rtag (label, attrs, [typ] (* one non-tuple thing *)) ->
+      | Rtag (label, _, [typ] (* one non-tuple thing *)) ->
         let var = "a" in
         let body = Ast_helper.Exp.(variant label.txt (Some [%expr a])) in
         let fn = last_fun ~loc var body in
@@ -216,7 +214,7 @@ let rec expr_of_typ always_nonempty quoter typ =
     in
     let cases = List.map (fun x -> translate x.prf_desc) fields in
     [%expr Crowbar.choose [%e (make_crowbar_list ~loc cases)]]
-  | { ptyp_loc } -> raise_errorf ~loc:ptyp_loc "%s cannot be derived for %s"
+  | { ptyp_loc; _ } -> raise_errorf ~loc:ptyp_loc "%s cannot be derived for %s"
                       deriver (string_of_core_type typ)
 and generate_tuple ~loc always_nonempty quoter ?constructor tuple =
   let vars = n_vars tuple in
@@ -235,13 +233,13 @@ and generate_tuple ~loc always_nonempty quoter ?constructor tuple =
 let fold_right_type_params fn params accum =
   List.fold_right (fun (param, _) accum ->
       match param with
-      | { ptyp_desc = Ptyp_any } -> accum
-      | { ptyp_desc = Ptyp_var name } ->
+      | { ptyp_desc = Ptyp_any; _ } -> accum
+      | { ptyp_desc = Ptyp_var name; _ } ->
         let name = mkloc name param.ptyp_loc in
         fn name accum
       | _ -> assert false)
     params accum
-let fold_right_type_decl fn { ptype_params } accum =
+let fold_right_type_decl fn { ptype_params; _ } accum =
   fold_right_type_params fn ptype_params accum
 
 let poly_arrow_of_type_decl fn type_decl typ =
@@ -267,17 +265,17 @@ let core_type_of_decl type_decl =
     type_decl
     [%type: [%t typ] Crowbar.gen Lazy.t]
 
-let str_of_type ~always_nonempty ~path ({ptype_loc = loc } as type_decl) =
+let str_of_type ~always_nonempty ({ptype_loc = loc; _ } as type_decl) =
   let quoter = Ppxlib.Quoter.create () in
   (* TODO: generalize this to "a list of things that have a type and attributes"
      rather than labels; we could use it more generally *)
   let gens_and_fn_of_labels ?name labels =
-    let gens = labels |> List.map (fun {pld_type; pld_attributes} ->
+    let gens = labels |> List.map (fun {pld_type; _} ->
         match Attribute.get Attr.generator pld_type with
         | Some generator -> generator
         | None -> expr_of_typ always_nonempty quoter pld_type) in
     let vars = n_vars labels in
-    let field_assignments = labels |> List.mapi (fun n {pld_name} ->
+    let field_assignments = labels |> List.mapi (fun n {pld_name; _} ->
       let l = lid ~loc pld_name.txt in
       (l, Ast_helper.Exp.ident @@ lid ~loc @@ List.nth vars n))
     in
@@ -306,7 +304,7 @@ let str_of_type ~always_nonempty ~path ({ptype_loc = loc } as type_decl) =
         [%expr Crowbar.(map [%e (make_crowbar_list ~loc gens)] [%e fn_vars_to_record])]
       | Ptype_variant constrs, _ ->
         let cases = constrs |>
-                    List.map (fun ({pcd_attributes; pcd_name; pcd_res; pcd_args; pcd_loc} as pcd) ->
+                    List.map (fun ({pcd_name; pcd_res; pcd_args; pcd_loc; _} as pcd) ->
                         match Attribute.get Attr.generator_cd pcd with
                         | Some generator -> generator
                         | None ->
@@ -385,7 +383,7 @@ let tag_recursive_for_unlazifying type_decls =
     then add_tag core_type
     else core_type
   in
-  let rec descender needle type_decl =
+  let descender needle type_decl =
     match type_decl.ptype_kind, type_decl.ptype_manifest with
     | Ptype_abstract, Some manifest ->
       {type_decl with ptype_manifest = Some (tag_on_match needle manifest) }
@@ -438,9 +436,9 @@ let unlazify type_decl =
     let polymorphize = poly_fun_of_type_decl type_decl in
     Str.value Nonrecursive [Vb.mk (Ast_builder.Default.pvar ~loc name) (polymorphize lazy_fn)]
 
-let from_type_decl ~loc ~path (rec_flag, type_decls) always_nonempty =
+let from_type_decl ~loc:_ ~path:_ (_rec_flag, type_decls) always_nonempty =
   let type_decls = tag_recursive_for_unlazifying type_decls in
-  let bodies = List.concat (List.map (str_of_type ~always_nonempty ~path) type_decls) in
+  let bodies = List.concat (List.map (str_of_type ~always_nonempty) type_decls) in
   (Str.value Recursive bodies) :: (List.map unlazify type_decls)
 
 let str_type_decl =
@@ -449,7 +447,7 @@ let str_type_decl =
     Ppxlib.Deriving.Args.(empty +> flag "nonempty")
     (Expansion_context.Deriver.with_loc_and_path from_type_decl)
 
-let extension ~loc ~path typ =
+let extension ~loc:_ ~path:_ typ =
   expr_of_typ false (Ppxlib.Quoter.create ()) typ
  
 let deriver =
