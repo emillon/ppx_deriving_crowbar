@@ -5,6 +5,47 @@ let mkloc txt loc = {Location.txt; loc}
 
 let lid ~loc s = mkloc (Longident.parse s) loc
 
+let free_vars_in_core_type typ =
+  let rec free_in typ =
+    match typ with
+    | { ptyp_desc = Ptyp_any; _ } -> []
+    | { ptyp_desc = Ptyp_var name; _ } ->
+      [mkloc name typ.ptyp_loc]
+    | { ptyp_desc = Ptyp_arrow (_, x, y); _ } -> free_in x @ free_in y
+    | { ptyp_desc = (Ptyp_tuple xs | Ptyp_constr (_, xs)); _ } ->
+      List.map free_in xs |> List.concat
+    | { ptyp_desc = Ptyp_alias (x, name); _ } ->
+      [mkloc name typ.ptyp_loc]
+      @ free_in x
+    | { ptyp_desc = Ptyp_poly (bound, x); _ } ->
+      List.filter (fun y -> not (List.mem y bound)) (free_in x)
+    | { ptyp_desc = Ptyp_variant (rows, _, _); _ } ->
+      List.map (
+          function 
+                    {prf_desc = Rtag(_, _, ts); _}  
+                                     -> List.map free_in ts
+                 | 
+                    {prf_desc = Rinherit(t); _}  
+                                    -> [free_in t]
+        ) rows |> List.concat |> List.concat
+    | _ -> assert false
+  in
+  let uniq lst =
+    let module StringSet = Set.Make(String) in
+    let add name (names, txts) =
+      let txt =
+        name.txt
+      in
+      if StringSet.mem txt txts
+      then (names, txts)
+      else (name :: names, StringSet.add txt txts)
+    in fst (List.fold_right add lst ([], StringSet.empty))
+  in free_in typ |> uniq
+
+let strong_type_of_type ty =
+  let free_vars = free_vars_in_core_type ty in
+  Typ.force_poly @@ Typ.poly free_vars ty
+
 let app ~loc f = function
   | [] -> f
   | args -> Ast_helper.Exp.apply ~loc f
@@ -297,7 +338,8 @@ let str_of_type ~always_nonempty ({ptype_loc = loc; _ } as type_decl) =
         [%expr Crowbar.choose [%e (make_crowbar_list ~loc cases)]]
   in
   let polymorphize = poly_fun_of_type_decl type_decl in
-  let out_type = core_type_of_decl type_decl in
+  let out_type =
+    strong_type_of_type @@ core_type_of_decl type_decl in
   let generate_var = Ast_builder.Default.pvar ~loc (mangle_type_decl type_decl) in
   [Vb.mk (Pat.constraint_ generate_var out_type)
      (Ppxlib.Quoter.sanitize quoter (polymorphize (lazify loc generator)))
