@@ -96,7 +96,8 @@ let rec expr_of_typ always_nonempty quoter typ =
         (List.map expr_of_typ args)
     in
     let matches (loc, _) = (0 = String.compare loc.txt unlazify_attribute_name) in
-    match List.exists matches typ.ptyp_attributes with
+    let attributes = Ppx_deriving_crowbar_compat.attributes_as_assoc_list typ.ptyp_attributes in
+    match List.exists matches attributes with
     | true -> [%expr Crowbar.unlazy [%e fwd]]
     | false -> [%expr [%e fwd]]
     end
@@ -112,28 +113,28 @@ let rec expr_of_typ always_nonempty quoter typ =
            available things (which we can't get more clues about than this here
            typedef... hm, unless the labels are clues, actually; TODO think
            about that a bit more, I think they're not but make sure). *)
-    let translate = function
+    let translate : Ppx_deriving_crowbar_compat.row_field_desc -> _ = function
       | Rinherit typ -> expr_of_typ typ
-      | Rtag (label, attrs, _, []) ->
+      | Rtag (label, attrs, []) ->
         (* nullary, just use the label name *)
         [%expr Crowbar.const [%e Ast_helper.Exp.variant label.txt None]]
-      | Rtag (label, attrs, _, [{ptyp_desc = Ptyp_tuple tuple}]) ->
+      | Rtag (label, attrs, [{ptyp_desc = Ptyp_tuple tuple}]) ->
         (* good ol' tuples *)
         let (gens, last_fun) =
           generate_tuple always_nonempty quoter
             ~constructor:(Ast_helper.Exp.variant label.txt) tuple in
         [%expr Crowbar.(map [%e (make_crowbar_list gens)] [%e last_fun])]
-      | Rtag (label, attrs, _, [typ] (* one non-tuple thing *)) ->
+      | Rtag (label, attrs, [typ] (* one non-tuple thing *)) ->
         let var = "a" in
         let body = Ast_helper.Exp.(variant label.txt
             (Some (ident @@ Ast_convenience.lid var))) in
         let fn = last_fun var body in
         [%expr Crowbar.(map [[%e expr_of_typ typ]] [%e fn])]
                                                  
-      | Rtag (_,_,_,_) -> raise_errorf ~loc:ptyp_loc "%s cannot be derived for %s"
+      | Rtag (_,_,_) -> raise_errorf ~loc:ptyp_loc "%s cannot be derived for %s"
                       deriver (Ppx_deriving.string_of_core_type typ)
     in
-    let cases = List.map translate fields in
+    let cases = List.map (fun x -> translate (Ppx_deriving_crowbar_compat.to_row_field_desc x)) fields in
     [%expr Crowbar.choose [%e (make_crowbar_list cases)]]
   | { ptyp_loc } -> raise_errorf ~loc:ptyp_loc "%s cannot be derived for %s"
                       deriver (Ppx_deriving.string_of_core_type typ)
@@ -241,7 +242,9 @@ let tag_recursive_for_unlazifying type_decls =
     let loc = Location.mknoloc unlazify_attribute_name in
     let payload : Parsetree.payload =
       (PStr [(Ast_helper.Str.mk @@ Pstr_eval ([%expr "Crowbar.unlazy"], []))]) in
-    let new_tag : Parsetree.attribute = loc, payload in
+    let new_tag : Parsetree.attribute =
+      Ppx_deriving_crowbar_compat.make_attribute loc payload
+    in
     Ast_helper.Typ.attr core_type new_tag
   in
   let rec tag_on_match (needle : type_declaration) core_type =
@@ -259,9 +262,8 @@ let tag_recursive_for_unlazifying type_decls =
       | Ptyp_tuple l -> {core_type with ptyp_desc =
                         Ptyp_tuple (List.map (tag_on_match needle) l)}
       | Ptyp_variant (fields, openness, labels) ->
-        let dig = function
-          | Rinherit _ as a -> a
-          | Rtag (a, b, c, d) -> Rtag (a, b, c, List.map (tag_on_match needle) d)
+        let dig =
+          Ppx_deriving_crowbar_compat.map_row_field_core_type (fun d -> List.map (tag_on_match needle) d)
         in
         {core_type with ptyp_desc =
                           Ptyp_variant ((List.map dig fields), openness, labels)}
